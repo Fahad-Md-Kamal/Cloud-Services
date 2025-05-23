@@ -1,0 +1,51 @@
+[project]
+name = "irtoo-func"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "azure-functions>=1.23.0",
+    "pre-commit>=4.2.0",
+]
+
+[tool.isort]
+py_version = 39
+profile = "black"
+line_length = 120
+multi_line_output = 3
+include_trailing_comma = true
+use_parentheses = true
+
+[tool.ruff]
+target-version = "py39"
+extend-exclude = [
+    "*/migrations/*",
+]
+src = ["."]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "S", "DJ", "C90", "UP", "PL", "RUF"]
+ignore = [
+    "E501",  # line too long, handled by black
+    "B008",  # do not perform function calls in argument defaults
+    # Recommendations from Ruff docs https://docs.astral.sh/ruff/formatter/#conflicting-lint-rules
+    "W191",
+    "E111",
+    "E114",
+    "E117",
+    "D206",
+    "D300",
+    "Q000",
+    "Q001",
+    "Q002",
+    "Q003",
+    "RUF012",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"*tests/*" = ["S101"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["irtool"]
