@@ -1,18 +1,20 @@
 #!/bin/bash
 
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+source "$SCRIPT_DIR/common.sh"
+
 # Script to upload test files and trigger the processing pipeline
 
 echo "Uploading test file to S3..."
-
-# Set LocalStack endpoint
-export AWS_ACCESS_KEY_ID=test
-export AWS_SECRET_ACCESS_KEY=test
-export AWS_DEFAULT_REGION=us-east-1
-ENDPOINT="--endpoint-url=http://localhost:4566"
+require_localstack
 
 # Upload the sample CSV file
 echo "Uploading sample.csv to file-uploads bucket..."
-aws s3 cp data/sample.csv s3://file-uploads/ $ENDPOINT
+SAMPLE_FILE="$REPO_ROOT/data/sample.csv"
+aws_localstack_s3_upload "$SAMPLE_FILE" "s3://file-uploads/$(basename "$SAMPLE_FILE")"
 
 # Wait a moment for processing
 echo "File uploaded! Waiting for processing..."
@@ -20,46 +22,52 @@ sleep 5
 
 # Check Lambda logs
 echo "Checking Lambda logs..."
-aws logs describe-log-groups $ENDPOINT
+aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-groups
 echo ""
 
 # Check if we can get the latest log group for our Lambda
 LOG_GROUP="/aws/lambda/file-processor"
-echo "Getting recent Lambda logs..."
-aws logs describe-log-streams \
-    --log-group-name $LOG_GROUP \
-    --order-by LastEventTime \
-    --descending \
-    $ENDPOINT
+LOG_GROUP_EXISTS=$(aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-groups \
+    --log-group-name-prefix "$LOG_GROUP" \
+    --query 'logGroups[0].logGroupName' \
+    --output text 2>/dev/null || true)
 
-# Try to get the latest log events
-echo "Latest log events:"
-LATEST_STREAM=$(aws logs describe-log-streams \
-    --log-group-name $LOG_GROUP \
-    --order-by LastEventTime \
-    --descending \
-    --max-items 1 \
-    --query 'logStreams[0].logStreamName' \
-    --output text \
-    $ENDPOINT)
+if [ "$LOG_GROUP_EXISTS" != "None" ] && [ "$LOG_GROUP_EXISTS" != "" ]; then
+    echo "Getting recent Lambda logs..."
+    aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-streams \
+        --log-group-name "$LOG_GROUP" \
+        --order-by LastEventTime \
+        --descending
 
-if [ "$LATEST_STREAM" != "None" ] && [ "$LATEST_STREAM" != "" ]; then
-    aws logs get-log-events \
-        --log-group-name $LOG_GROUP \
-        --log-stream-name $LATEST_STREAM \
-        --query 'events[*].message' \
-        --output text \
-        $ENDPOINT
+    echo "Latest log events:"
+    LATEST_STREAM=$(aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-streams \
+        --log-group-name "$LOG_GROUP" \
+        --order-by LastEventTime \
+        --descending \
+        --max-items 1 \
+        --query 'logStreams[0].logStreamName' \
+        --output text)
+
+    if [ "$LATEST_STREAM" != "None" ] && [ "$LATEST_STREAM" != "" ]; then
+        aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs get-log-events \
+            --log-group-name "$LOG_GROUP" \
+            --log-stream-name "$LATEST_STREAM" \
+            --query 'events[*].message' \
+            --output text
+    else
+        echo "No Lambda log streams found yet."
+    fi
+else
+    echo "Lambda log group does not exist yet. This usually means the function was not invoked."
 fi
 
 # Check DynamoDB for results
 echo ""
 echo "Checking DynamoDB for processing results..."
-aws dynamodb scan \
+aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb scan \
     --table-name file-processing-results \
     --query 'Items[*].[file_id.S,status.S,row_count.N,column_count.N]' \
-    --output table \
-    $ENDPOINT
+    --output table
 
 echo ""
 echo "Pipeline test complete!"

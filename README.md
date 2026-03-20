@@ -1,6 +1,6 @@
 # CSV File Processing Pipeline
 
-A serverless file processing pipeline that automatically analyzes CSV files uploaded to S3, extracts metadata, and stores the results in DynamoDB. Built with AWS Lambda, S3, DynamoDB, and LocalStack for local development. 
+A serverless file processing pipeline that automatically analyzes CSV files uploaded to S3, extracts metadata, and stores the results in DynamoDB. Built with AWS Lambda, S3, DynamoDB, and LocalStack for local development.
 
 ## 🎯 Project Overview
 

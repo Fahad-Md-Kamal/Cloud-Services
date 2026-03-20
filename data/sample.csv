@@ -2,7 +2,7 @@ date,product,region,sales_rep,amount,quantity
 2024-01-15,Laptop Pro,North,Alice Johnson,1299.99,1
 2024-01-15,Mouse Pad,South,Bob Smith,12.99,3
 2024-01-16,Wireless Mouse,East,Carol Davis,45.99,2
-2024-01-16,Monitor 27",West,David Wilson,299.99,1
+2024-01-16,"Monitor 27",West,David Wilson,299.99,1
 2024-01-17,Keyboard Mechanical,North,Alice Johnson,89.99,1
 2024-01-17,USB Cable,South,Bob Smith,15.99,5
 2024-01-18,Laptop Pro,East,Carol Davis,1299.99,2
