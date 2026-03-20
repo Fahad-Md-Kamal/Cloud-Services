@@ -1,0 +1,18 @@
+FROM python:3.11-slim
+
+WORKDIR /worker
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-transcriber.txt .
+RUN pip install --no-cache-dir -r requirements-transcriber.txt
+
+COPY shared_config.py ./shared_config.py
+COPY worker ./worker
+
+CMD ["python", "worker/transcriber.py"]

@@ -1,39 +1,65 @@
-import os
+import mimetypes
 from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+
+from shared_config import boto3_kwargs, load_localstack_aws_settings, require_envs
 
 
-LOCALSTACK_ENDPOINT = os.getenv("LOCALSTACK_ENDPOINT", "http://localhost:4566")
-AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "us-east-1")
-UPLOAD_BUCKET = os.getenv("UPLOAD_BUCKET", "file-uploads")
-TABLE_NAME = os.getenv("TABLE_NAME", "file-processing-results")
-ALLOWED_EXTENSIONS = {".csv", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+TRANSCRIPTION_ENGINES = {"openai", "whisper-large-v3", "tiny"}
+ALLOWED_EXTENSIONS = {
+    ".csv",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".webp",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+}
+MEDIA_EXTENSIONS = {
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".aac",
+    ".flac",
+    ".ogg",
+    ".mp4",
+    ".mov",
+    ".mkv",
+    ".avi",
+    ".webm",
+}
 
 
 app = FastAPI(title="File Upload API")
 
+AWS_SETTINGS = load_localstack_aws_settings()
+SERVICE_ENV = require_envs("UPLOAD_BUCKET", "TABLE_NAME", "DEFAULT_TRANSCRIPTION_ENGINE")
+LOCALSTACK_ENDPOINT = AWS_SETTINGS.endpoint_url
+UPLOAD_BUCKET = SERVICE_ENV["UPLOAD_BUCKET"]
+TABLE_NAME = SERVICE_ENV["TABLE_NAME"]
+DEFAULT_TRANSCRIPTION_ENGINE = SERVICE_ENV["DEFAULT_TRANSCRIPTION_ENGINE"]
+
 
 def get_s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=LOCALSTACK_ENDPOINT,
-        region_name=AWS_REGION,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
-    )
+    return boto3.client("s3", **boto3_kwargs(AWS_SETTINGS))
 
 
 def get_results_table():
-    dynamodb = boto3.resource(
-        "dynamodb",
-        endpoint_url=LOCALSTACK_ENDPOINT,
-        region_name=AWS_REGION,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
-    )
+    dynamodb = boto3.resource("dynamodb", **boto3_kwargs(AWS_SETTINGS))
     return dynamodb.Table(TABLE_NAME)
 
 
@@ -54,6 +80,8 @@ def health():
         "bucket": UPLOAD_BUCKET,
         "endpoint": LOCALSTACK_ENDPOINT,
         "table": TABLE_NAME,
+        "default_transcription_engine": DEFAULT_TRANSCRIPTION_ENGINE,
+        "transcription_engines": sorted(TRANSCRIPTION_ENGINES),
     }
 
 
@@ -95,17 +123,48 @@ def get_file(file_id: str):
 
 
 @app.post("/upload")
-def upload_file(file: UploadFile = File(...)):
+def upload_file(
+    file: UploadFile = File(...),
+    transcription_engine: str | None = Form(None),
+):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required.")
 
-    if not any(file.filename.lower().endswith(extension) for extension in ALLOWED_EXTENSIONS):
+    lower_filename = file.filename.lower()
+
+    if not any(lower_filename.endswith(extension) for extension in ALLOWED_EXTENSIONS):
         raise HTTPException(
             status_code=400,
-            detail="Supported files: .csv, .png, .jpg, .jpeg, .gif, .bmp, .webp",
+            detail=(
+                "Supported files: .csv, .png, .jpg, .jpeg, .gif, .bmp, .webp, "
+                ".mp3, .wav, .m4a, .aac, .flac, .ogg, .mp4, .mov, .mkv, .avi"
+            ),
         )
 
     object_key = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}_{file.filename}"
+    content_type = file.content_type or mimetypes.guess_type(file.filename)[0] or "application/octet-stream"
+    extra_args = {"ContentType": content_type}
+
+    is_media_file = any(lower_filename.endswith(extension) for extension in MEDIA_EXTENSIONS)
+    if transcription_engine is None and is_media_file:
+        transcription_engine = DEFAULT_TRANSCRIPTION_ENGINE
+
+    if transcription_engine is not None:
+        transcription_engine = transcription_engine.strip().lower()
+
+        if not is_media_file:
+            raise HTTPException(
+                status_code=400,
+                detail="Transcription engine can only be selected for audio or video uploads.",
+            )
+
+        if transcription_engine not in TRANSCRIPTION_ENGINES:
+            raise HTTPException(
+                status_code=400,
+                detail="Supported transcription engines: openai, whisper-large-v3, tiny",
+            )
+
+        extra_args["Metadata"] = {"transcription_engine": transcription_engine}
 
     try:
         s3_client = get_s3_client()
@@ -113,7 +172,7 @@ def upload_file(file: UploadFile = File(...)):
             file.file,
             UPLOAD_BUCKET,
             object_key,
-            ExtraArgs={"ContentType": file.content_type or "text/csv"},
+            ExtraArgs=extra_args,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Upload failed: {exc}") from exc
@@ -125,4 +184,5 @@ def upload_file(file: UploadFile = File(...)):
         "bucket": UPLOAD_BUCKET,
         "object_key": object_key,
         "filename": file.filename,
+        "transcription_engine": transcription_engine,
     }

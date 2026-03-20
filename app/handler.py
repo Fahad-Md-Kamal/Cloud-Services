@@ -6,17 +6,25 @@ from datetime import datetime
 from urllib.parse import unquote_plus
 
 import boto3
+from shared_config import require_envs
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+LAMBDA_ENV = require_envs("TABLE_NAME", "TRANSCRIPTION_QUEUE_NAME", "DEFAULT_TRANSCRIPTION_ENGINE")
+TABLE_NAME = LAMBDA_ENV["TABLE_NAME"]
+TRANSCRIPTION_QUEUE_NAME = LAMBDA_ENV["TRANSCRIPTION_QUEUE_NAME"]
+DEFAULT_TRANSCRIPTION_ENGINE = LAMBDA_ENV["DEFAULT_TRANSCRIPTION_ENGINE"]
+
 s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")
+sqs_client = boto3.client("sqs")
 
-TABLE_NAME = "file-processing-results"
 CSV_EXTENSIONS = {".csv"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
 
 
 def lambda_handler(event, context):
@@ -34,6 +42,10 @@ def lambda_handler(event, context):
                 result = process_csv_file(bucket, key)
             elif has_extension(key, IMAGE_EXTENSIONS):
                 result = process_image_file(bucket, key)
+            elif has_extension(key, AUDIO_EXTENSIONS):
+                result = queue_transcription_job(bucket, key, "audio")
+            elif has_extension(key, VIDEO_EXTENSIONS):
+                result = queue_transcription_job(bucket, key, "video")
             else:
                 logger.warning("Skipping unsupported file: %s", key)
                 continue
@@ -72,6 +84,10 @@ def base_result(bucket, key, file_type, file_size, content_type):
         "status": "success",
         "error_message": None,
     }
+
+
+def get_s3_object_metadata(bucket, key):
+    return s3_client.head_object(Bucket=bucket, Key=key)
 
 
 def get_s3_object(bucket, key):
@@ -134,6 +150,49 @@ def process_image_file(bucket, key):
         return result
     except Exception as exc:
         return build_error_result(bucket, key, "image", f"Error processing image file: {exc}")
+
+
+def queue_transcription_job(bucket, key, file_type):
+    """
+    Store an initial queued record and hand off heavy transcription work to the worker queue.
+    """
+    try:
+        metadata = get_s3_object_metadata(bucket, key)
+        file_size = metadata["ContentLength"]
+        content_type = metadata.get("ContentType", "application/octet-stream")
+        object_metadata = metadata.get("Metadata", {})
+        transcription_engine = object_metadata.get("transcription_engine") or DEFAULT_TRANSCRIPTION_ENGINE
+
+        result = base_result(bucket, key, file_type, file_size, content_type)
+        result.update(
+            {
+                "status": "queued",
+                "transcription_engine": transcription_engine,
+                "transcript": None,
+                "transcript_bucket": None,
+                "transcript_key": None,
+                "transcription_language": None,
+                "media_duration_seconds": None,
+            }
+        )
+
+        queue_url = sqs_client.get_queue_url(QueueName=TRANSCRIPTION_QUEUE_NAME)["QueueUrl"]
+        sqs_client.send_message(
+            QueueUrl=queue_url,
+            MessageBody=json.dumps(
+                {
+                    "bucket": bucket,
+                    "object_key": key,
+                    "file_type": file_type,
+                    "transcription_engine": transcription_engine,
+                }
+            ),
+        )
+
+        logger.info("Queued %s transcription job for file: %s", file_type, key)
+        return result
+    except Exception as exc:
+        return build_error_result(bucket, key, file_type, f"Error queueing transcription job: {exc}")
 
 
 def build_error_result(bucket, key, file_type, error_message):

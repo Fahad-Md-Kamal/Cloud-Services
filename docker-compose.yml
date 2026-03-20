@@ -1,16 +1,64 @@
 services:
 
   localstack:
-    container_name: localstack-main
+    container_name: ${LOCALSTACK_CONTAINER:?LOCALSTACK_CONTAINER is required in .env}
     image: localstack/localstack:latest
+    env_file:
+      - .env
     ports:
       - "127.0.0.1:4566:4566"
       - "127.0.0.1:4510-4559:4510-4559"
     environment:
       - DEBUG=1
       - PERSISTENCE=1
-      - SERVICES=s3,dynamodb,lambda,iam,sts,logs
-      - AWS_DEFAULT_REGION=us-east-1
+      - SERVICES=s3,dynamodb,lambda,iam,sts,logs,sqs
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?AWS_DEFAULT_REGION is required in .env}
     volumes:
       - "./volume:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: file-upload-api
+    env_file:
+      - .env
+    depends_on:
+      - localstack
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required in .env}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required in .env}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?AWS_DEFAULT_REGION is required in .env}
+      - LOCALSTACK_ENDPOINT=${LOCALSTACK_DOCKER_ENDPOINT:?LOCALSTACK_DOCKER_ENDPOINT is required in .env}
+      - UPLOAD_BUCKET=${UPLOAD_BUCKET:?UPLOAD_BUCKET is required in .env}
+      - TABLE_NAME=${TABLE_NAME:?TABLE_NAME is required in .env}
+      - DEFAULT_TRANSCRIPTION_ENGINE=${DEFAULT_TRANSCRIPTION_ENGINE:?DEFAULT_TRANSCRIPTION_ENGINE is required in .env}
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  transcriber:
+    build:
+      context: .
+      dockerfile: Dockerfile.transcriber
+    container_name: media-transcriber
+    env_file:
+      - .env
+    depends_on:
+      - localstack
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is required in .env}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is required in .env}
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:?AWS_DEFAULT_REGION is required in .env}
+      - LOCALSTACK_ENDPOINT=${LOCALSTACK_DOCKER_ENDPOINT:?LOCALSTACK_DOCKER_ENDPOINT is required in .env}
+      - TRANSCRIPTION_QUEUE_NAME=${TRANSCRIPTION_QUEUE_NAME:?TRANSCRIPTION_QUEUE_NAME is required in .env}
+      - TABLE_NAME=${TABLE_NAME:?TABLE_NAME is required in .env}
+      - PROCESSED_BUCKET=${PROCESSED_BUCKET:?PROCESSED_BUCKET is required in .env}
+      - WHISPER_TINY_MODEL=${WHISPER_TINY_MODEL:?WHISPER_TINY_MODEL is required in .env}
+      - WHISPER_LARGE_V3_MODEL=${WHISPER_LARGE_V3_MODEL:?WHISPER_LARGE_V3_MODEL is required in .env}
+      - WHISPER_COMPUTE_TYPE=${WHISPER_COMPUTE_TYPE:?WHISPER_COMPUTE_TYPE is required in .env}
+      - WHISPER_DOWNLOAD_ROOT=${WHISPER_DOWNLOAD_ROOT:?WHISPER_DOWNLOAD_ROOT is required in .env}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_TRANSCRIPTION_MODEL=${OPENAI_TRANSCRIPTION_MODEL:?OPENAI_TRANSCRIPTION_MODEL is required in .env}
+    volumes:
+      - "./.cache/whisper:${WHISPER_DOWNLOAD_ROOT:?WHISPER_DOWNLOAD_ROOT is required in .env}"

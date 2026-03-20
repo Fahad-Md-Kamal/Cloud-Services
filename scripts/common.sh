@@ -2,15 +2,38 @@
 
 set -euo pipefail
 
-LOCALSTACK_CONTAINER="${LOCALSTACK_CONTAINER:-localstack-main}"
-LOCALSTACK_ENDPOINT="${LOCALSTACK_ENDPOINT:-http://localhost:4566}"
-AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-test}"
-AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-test}"
-AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-us-east-1}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+ENV_FILE="$REPO_ROOT/.env"
+
+if [[ -f "$ENV_FILE" ]]; then
+    set -a
+    source "$ENV_FILE"
+    set +a
+else
+    echo "Error: $ENV_FILE not found. Copy .env.example to .env and set the required values." >&2
+    exit 1
+fi
+
+require_env() {
+    local name="$1"
+    if [[ -z "${!name:-}" ]]; then
+        echo "Error: required environment variable '$name' is not set." >&2
+        exit 1
+    fi
+}
+
+require_env LOCALSTACK_CONTAINER
+require_env LOCALSTACK_ENDPOINT
+require_env AWS_ACCESS_KEY_ID
+require_env AWS_SECRET_ACCESS_KEY
+require_env AWS_DEFAULT_REGION
 
 export AWS_ACCESS_KEY_ID
 export AWS_SECRET_ACCESS_KEY
 export AWS_DEFAULT_REGION
+export LOCALSTACK_CONTAINER
+export LOCALSTACK_ENDPOINT
 
 aws_localstack_mode() {
     if [[ -n "${AWS_LOCALSTACK_MODE:-}" ]]; then

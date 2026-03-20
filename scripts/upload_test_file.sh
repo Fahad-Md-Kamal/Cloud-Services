@@ -10,11 +10,14 @@ source "$SCRIPT_DIR/common.sh"
 
 echo "Uploading test file to S3..."
 require_localstack
+require_env UPLOAD_BUCKET
+require_env TABLE_NAME
+require_env LAMBDA_FUNCTION_NAME
 
 # Upload the sample CSV file
-echo "Uploading sample.csv to file-uploads bucket..."
+echo "Uploading sample.csv to $UPLOAD_BUCKET bucket..."
 SAMPLE_FILE="$REPO_ROOT/data/sample.csv"
-aws_localstack_s3_upload "$SAMPLE_FILE" "s3://file-uploads/$(basename "$SAMPLE_FILE")"
+aws_localstack_s3_upload "$SAMPLE_FILE" "s3://$UPLOAD_BUCKET/$(basename "$SAMPLE_FILE")"
 
 # Wait a moment for processing
 echo "File uploaded! Waiting for processing..."
@@ -26,7 +29,7 @@ aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-groups
 echo ""
 
 # Check if we can get the latest log group for our Lambda
-LOG_GROUP="/aws/lambda/file-processor"
+LOG_GROUP="/aws/lambda/$LAMBDA_FUNCTION_NAME"
 LOG_GROUP_EXISTS=$(aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" logs describe-log-groups \
     --log-group-name-prefix "$LOG_GROUP" \
     --query 'logGroups[0].logGroupName' \
@@ -65,7 +68,7 @@ fi
 echo ""
 echo "Checking DynamoDB for processing results..."
 aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb scan \
-    --table-name file-processing-results \
+    --table-name "$TABLE_NAME" \
     --query 'Items[*].[file_id.S,status.S,row_count.N,column_count.N]' \
     --output table
 

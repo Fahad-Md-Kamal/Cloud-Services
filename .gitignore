@@ -1,4 +1,6 @@
 volume/
 __pycache__/
 *.pyc
-.env/
+.cache/
+.venv/
+.env
