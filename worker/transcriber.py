@@ -76,6 +76,7 @@ def get_whisper_model(model_name):
             compute_type=WHISPER_COMPUTE_TYPE,
             download_root=WHISPER_DOWNLOAD_ROOT,
         )
+        logger.info("Whisper model loaded successfully: %s", model_name)
     return whisper_models[model_name]
 
 
@@ -158,9 +159,51 @@ def mark_job_failed(object_key, error_message):
     )
 
 
+def mark_job_processing(object_key, duration_seconds=None):
+    expression_values = {
+        ":status": "processing",
+        ":progress_percent": 0,
+        ":processed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    update_expression = """
+        SET #status = :status,
+            progress_percent = :progress_percent,
+            processed_at = :processed_at
+    """
+
+    if duration_seconds is not None:
+        update_expression += ", media_duration_seconds = :media_duration_seconds"
+        expression_values[":media_duration_seconds"] = duration_seconds
+
+    table.update_item(
+        Key={"file_id": object_key},
+        UpdateExpression=update_expression,
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues=expression_values,
+    )
+
+
+def update_job_progress(object_key, progress_percent):
+    table.update_item(
+        Key={"file_id": object_key},
+        UpdateExpression="""
+            SET #status = :status,
+                progress_percent = :progress_percent,
+                processed_at = :processed_at
+        """,
+        ExpressionAttributeNames={"#status": "status"},
+        ExpressionAttributeValues={
+            ":status": "processing",
+            ":progress_percent": int(progress_percent),
+            ":processed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        },
+    )
+
+
 def update_transcript_record(job, transcript_text, language, duration_seconds, transcript_bucket, transcript_key):
     expression_values = {
         ":status": "success",
+        ":progress_percent": 100,
         ":transcript": transcript_text,
         ":language": language,
         ":processed_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -171,6 +214,7 @@ def update_transcript_record(job, transcript_text, language, duration_seconds, t
 
     update_expression = """
         SET #status = :status,
+            progress_percent = :progress_percent,
             transcript = :transcript,
             transcription_language = :language,
             transcription_engine = :transcription_engine,
@@ -193,11 +237,26 @@ def update_transcript_record(job, transcript_text, language, duration_seconds, t
     )
 
 
-def transcribe_with_whisper(audio_path, transcription_engine):
+def transcribe_with_whisper(audio_path, transcription_engine, object_key, duration_seconds):
     model_name = WHISPER_LARGE_V3_MODEL if transcription_engine == "whisper-large-v3" else WHISPER_TINY_MODEL
     model = get_whisper_model(model_name)
     segments, info = model.transcribe(str(audio_path), vad_filter=True)
-    segment_text = [segment.text.strip() for segment in segments if segment.text.strip()]
+    total_seconds = float(duration_seconds) if duration_seconds is not None else None
+    last_reported_progress = -1
+    segment_text = []
+
+    for segment in segments:
+        text = segment.text.strip()
+        if text:
+            segment_text.append(text)
+
+        if total_seconds and total_seconds > 0:
+            progress_percent = min(99, int((segment.end / total_seconds) * 100))
+            if progress_percent >= last_reported_progress + 5:
+                last_reported_progress = progress_percent
+                logger.info("Transcription progress for %s: %s%%", object_key, progress_percent)
+                update_job_progress(object_key, progress_percent)
+
     transcript_text = " ".join(segment_text).strip()
     return transcript_text, info.language
 
@@ -240,13 +299,19 @@ def transcribe_job(job):
         logger.info("Normalizing media to WAV with ffmpeg for %s", job["object_key"])
         normalize_media_to_wav(str(source_path), str(audio_path))
         duration_seconds = probe_duration_seconds(str(audio_path))
+        mark_job_processing(job["object_key"], duration_seconds)
 
         if job["transcription_engine"] == "openai":
             logger.info("Submitting audio to OpenAI transcription for %s", job["object_key"])
             transcript_text, language = transcribe_with_openai(str(audio_path))
         else:
             logger.info("Running Whisper transcription for %s", job["object_key"])
-            transcript_text, language = transcribe_with_whisper(str(audio_path), job["transcription_engine"])
+            transcript_text, language = transcribe_with_whisper(
+                str(audio_path),
+                job["transcription_engine"],
+                job["object_key"],
+                duration_seconds,
+            )
 
         transcript_payload = {
             "bucket": job["bucket"],

@@ -162,6 +162,7 @@ def queue_transcription_job(bucket, key, file_type):
         result.update(
             {
                 "status": "queued",
+                "progress_percent": 0,
                 "transcription_engine": transcription_engine,
                 "transcript": None,
                 "transcript_bucket": None,
