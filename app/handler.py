@@ -6,16 +6,11 @@ from datetime import datetime
 from urllib.parse import unquote_plus
 
 import boto3
-from shared_config import get_settings
+from lambda_config import DEFAULT_TRANSCRIPTION_ENGINE, TABLE_NAME, TRANSCRIPTION_QUEUE_NAME
 
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-settings = get_settings()
-TABLE_NAME = settings.table_name
-TRANSCRIPTION_QUEUE_NAME = settings.transcription_queue_name
-DEFAULT_TRANSCRIPTION_ENGINE = settings.default_transcription_engine
 
 s3_client = boto3.client("s3")
 dynamodb = boto3.resource("dynamodb")

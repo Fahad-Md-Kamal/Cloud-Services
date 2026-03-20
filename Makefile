@@ -73,7 +73,7 @@ results:
 	@bash -lc 'source scripts/common.sh && require_localstack && require_env TABLE_NAME && aws_localstack --endpoint-url="$(LOCALSTACK_ENDPOINT)" dynamodb scan --table-name "$$TABLE_NAME"'
 
 api:
-	@$(COMPOSE_CMD) up -d api
+	@$(COMPOSE_CMD) up api
 
 api-local:
 	@bash -lc 'set -a && source .env && set +a && python3 -m uvicorn app.api:app --host 0.0.0.0 --port 8000 --reload'

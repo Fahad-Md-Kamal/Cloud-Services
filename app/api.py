@@ -3,12 +3,11 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 import boto3
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from shared_config import get_settings
 
 
-TRANSCRIPTION_ENGINES = {"openai", "whisper-large-v3", "tiny"}
 ALLOWED_EXTENSIONS = {
     ".csv",
     ".png",
@@ -80,7 +79,6 @@ def health():
         "endpoint": LOCALSTACK_ENDPOINT,
         "table": TABLE_NAME,
         "default_transcription_engine": DEFAULT_TRANSCRIPTION_ENGINE,
-        "transcription_engines": sorted(TRANSCRIPTION_ENGINES),
     }
 
 
@@ -122,10 +120,7 @@ def get_file(file_id: str):
 
 
 @app.post("/upload")
-def upload_file(
-    file: UploadFile = File(...),
-    transcription_engine: str | None = Form(None),
-):
+def upload_file(file: UploadFile = File(...)):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required.")
 
@@ -145,24 +140,8 @@ def upload_file(
     extra_args = {"ContentType": content_type}
 
     is_media_file = any(lower_filename.endswith(extension) for extension in MEDIA_EXTENSIONS)
-    if transcription_engine is None and is_media_file:
-        transcription_engine = DEFAULT_TRANSCRIPTION_ENGINE
-
+    transcription_engine = DEFAULT_TRANSCRIPTION_ENGINE if is_media_file else None
     if transcription_engine is not None:
-        transcription_engine = transcription_engine.strip().lower()
-
-        if not is_media_file:
-            raise HTTPException(
-                status_code=400,
-                detail="Transcription engine can only be selected for audio or video uploads.",
-            )
-
-        if transcription_engine not in TRANSCRIPTION_ENGINES:
-            raise HTTPException(
-                status_code=400,
-                detail="Supported transcription engines: openai, whisper-large-v3, tiny",
-            )
-
         extra_args["Metadata"] = {"transcription_engine": transcription_engine}
 
     try:

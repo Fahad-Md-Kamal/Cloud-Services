@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -14,13 +15,15 @@ class Settings(BaseSettings):
     processed_bucket: str
     table_name: str
     transcription_queue_name: str
-    default_transcription_engine: str
+    default_transcription_engine: Literal["openai", "whisper-large-v3", "tiny"]
     whisper_tiny_model: str
     whisper_large_v3_model: str
     whisper_compute_type: str
     whisper_download_root: str
     openai_transcription_model: str
     openai_api_key: str | None = None
+    transcription_visibility_timeout_seconds: int
+    transcription_poll_wait_seconds: int
     lambda_function_name: str
     lambda_role_name: str
     localstack_container: str

@@ -3,6 +3,7 @@ services:
   localstack:
     container_name: ${LOCALSTACK_CONTAINER:?LOCALSTACK_CONTAINER is required in .env}
     image: localstack/localstack:latest
+    restart: unless-stopped
     env_file:
       - .env
     ports:
@@ -22,6 +23,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: file-upload-api
+    restart: unless-stopped
     env_file:
       - .env
     depends_on:
@@ -42,6 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile.transcriber
     container_name: media-transcriber
+    restart: unless-stopped
     env_file:
       - .env
     depends_on:

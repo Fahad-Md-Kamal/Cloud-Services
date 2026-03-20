@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 
 import boto3
+from botocore.exceptions import ClientError, ConnectionClosedError, EndpointConnectionError
 from faster_whisper import WhisperModel
 from openai import OpenAI
 from shared_config import get_settings
@@ -25,6 +26,8 @@ WHISPER_COMPUTE_TYPE = settings.whisper_compute_type
 WHISPER_DOWNLOAD_ROOT = settings.whisper_download_root
 OPENAI_TRANSCRIPTION_MODEL = settings.openai_transcription_model
 OPENAI_API_KEY = settings.openai_api_key
+VISIBILITY_TIMEOUT_SECONDS = settings.transcription_visibility_timeout_seconds
+POLL_WAIT_SECONDS = settings.transcription_poll_wait_seconds
 
 s3_client = boto3.client("s3", **settings.boto3_kwargs)
 
@@ -39,6 +42,25 @@ openai_client = None
 
 def get_queue_url():
     return sqs_client.get_queue_url(QueueName=QUEUE_NAME)["QueueUrl"]
+
+
+def wait_for_queue_url(retry_delay_seconds=5):
+    while True:
+        try:
+            queue_url = get_queue_url()
+            logger.info("Connected to transcription queue: %s", queue_url)
+            return queue_url
+        except ClientError as exc:
+            error_code = exc.response.get("Error", {}).get("Code")
+            if error_code not in {"AWS.SimpleQueueService.NonExistentQueue", "QueueDoesNotExist"}:
+                raise
+
+            logger.info(
+                "Waiting for SQS queue '%s' to be created. Retrying in %s seconds.",
+                QUEUE_NAME,
+                retry_delay_seconds,
+            )
+            time.sleep(retry_delay_seconds)
 
 
 def get_model():
@@ -202,18 +224,28 @@ def transcribe_with_openai(audio_path):
 
 
 def transcribe_job(job):
+    logger.info(
+        "Starting transcription job for %s using engine %s",
+        job["object_key"],
+        job["transcription_engine"],
+    )
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_path = Path(temp_dir)
         source_path = temp_path / Path(job["object_key"]).name
         audio_path = temp_path / "normalized.wav"
 
+        logger.info("Downloading source media from s3://%s/%s", job["bucket"], job["object_key"])
         s3_client.download_file(job["bucket"], job["object_key"], str(source_path))
+
+        logger.info("Normalizing media to WAV with ffmpeg for %s", job["object_key"])
         normalize_media_to_wav(str(source_path), str(audio_path))
         duration_seconds = probe_duration_seconds(str(audio_path))
 
         if job["transcription_engine"] == "openai":
+            logger.info("Submitting audio to OpenAI transcription for %s", job["object_key"])
             transcript_text, language = transcribe_with_openai(str(audio_path))
         else:
+            logger.info("Running Whisper transcription for %s", job["object_key"])
             transcript_text, language = transcribe_with_whisper(str(audio_path), job["transcription_engine"])
 
         transcript_payload = {
@@ -229,6 +261,7 @@ def transcribe_job(job):
             job["bucket"], job["object_key"], transcript_payload
         )
 
+        logger.info("Writing transcript metadata to DynamoDB for %s", job["object_key"])
         update_transcript_record(
             job,
             transcript_text,
@@ -244,20 +277,36 @@ def process_message(message):
     body = json.loads(message["Body"])
     if not body.get("transcription_engine"):
         raise ValueError("Queue message is missing required transcription_engine.")
+    logger.info("Received queue message for %s", body["object_key"])
     transcribe_job(body)
 
 
+def wait_for_localstack_retry(retry_delay_seconds=5):
+    logger.warning(
+        "LocalStack endpoint %s is unavailable. Retrying in %s seconds.",
+        settings.localstack_endpoint,
+        retry_delay_seconds,
+    )
+    time.sleep(retry_delay_seconds)
+
+
 def run():
-    queue_url = get_queue_url()
+    queue_url = wait_for_queue_url()
     logger.info("Polling queue: %s", queue_url)
 
     while True:
-        response = sqs_client.receive_message(
-            QueueUrl=queue_url,
-            MaxNumberOfMessages=1,
-            WaitTimeSeconds=20,
-            VisibilityTimeout=120,
-        )
+        try:
+            response = sqs_client.receive_message(
+                QueueUrl=queue_url,
+                MaxNumberOfMessages=1,
+                WaitTimeSeconds=POLL_WAIT_SECONDS,
+                VisibilityTimeout=VISIBILITY_TIMEOUT_SECONDS,
+            )
+        except (EndpointConnectionError, ConnectionClosedError):
+            wait_for_localstack_retry()
+            queue_url = wait_for_queue_url()
+            logger.info("Resuming polling queue: %s", queue_url)
+            continue
 
         messages = response.get("Messages", [])
         if not messages:
@@ -272,11 +321,23 @@ def run():
                 )
             except Exception as exc:
                 body = json.loads(message["Body"])
-                mark_job_failed(body["object_key"], str(exc))
-                sqs_client.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=message["ReceiptHandle"],
-                )
+                try:
+                    mark_job_failed(body["object_key"], str(exc))
+                except (EndpointConnectionError, ConnectionClosedError):
+                    wait_for_localstack_retry()
+                    queue_url = wait_for_queue_url()
+                    logger.info("Resuming polling queue: %s", queue_url)
+                    continue
+
+                try:
+                    sqs_client.delete_message(
+                        QueueUrl=queue_url,
+                        ReceiptHandle=message["ReceiptHandle"],
+                    )
+                except (EndpointConnectionError, ConnectionClosedError):
+                    wait_for_localstack_retry()
+                    queue_url = wait_for_queue_url()
+                    logger.info("Resuming polling queue: %s", queue_url)
 
 
 if __name__ == "__main__":

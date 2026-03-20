@@ -23,9 +23,7 @@ echo "Creating deployment package..."
 ZIP_PATH="$REPO_ROOT/function.zip"
 PACKAGE_DIR="$(mktemp -d)"
 trap 'aws_localstack_unstage_file "${STAGED_ZIP_PATH:-}"; rm -rf "$PACKAGE_DIR"; rm -f "$ZIP_PATH"' EXIT
-
-python3 -m pip install --quiet -r "$REPO_ROOT/requirements-lambda.txt" --target "$PACKAGE_DIR"
-cp "$REPO_ROOT"/shared_config.py "$PACKAGE_DIR"/
+cp "$REPO_ROOT"/lambda_config.py "$PACKAGE_DIR"/
 cp "$REPO_ROOT"/app/*.py "$PACKAGE_DIR"/
 
 (cd "$PACKAGE_DIR" && zip -rq "$ZIP_PATH" .)
