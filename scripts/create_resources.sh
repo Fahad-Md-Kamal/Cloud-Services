@@ -12,24 +12,34 @@ echo "Creating AWS resources in LocalStack..."
 require_localstack
 
 # Create S3 bucket
-echo "Creating S3 bucket..."
-aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" s3 mb s3://file-uploads
-aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" s3 mb s3://processed-files
+echo "Ensuring S3 buckets exist..."
+for bucket in file-uploads processed-files; do
+    if aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+        echo "- Bucket already exists: $bucket"
+    else
+        aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" s3 mb "s3://$bucket"
+    fi
+done
 
 # List buckets to verify
 echo "Verifying S3 buckets..."
 aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" s3 ls
 
 # Create DynamoDB table
-echo "Creating DynamoDB table..."
-aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb create-table \
-    --table-name file-processing-results \
-    --attribute-definitions \
-        AttributeName=file_id,AttributeType=S \
-    --key-schema \
-        AttributeName=file_id,KeyType=HASH \
-    --provisioned-throughput \
-        ReadCapacityUnits=5,WriteCapacityUnits=5
+echo "Ensuring DynamoDB table exists..."
+if aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb describe-table \
+    --table-name file-processing-results >/dev/null 2>&1; then
+    echo "- Table already exists: file-processing-results"
+else
+    aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb create-table \
+        --table-name file-processing-results \
+        --attribute-definitions \
+            AttributeName=file_id,AttributeType=S \
+        --key-schema \
+            AttributeName=file_id,KeyType=HASH \
+        --provisioned-throughput \
+            ReadCapacityUnits=5,WriteCapacityUnits=5
+fi
 
 # Wait for table to be created
 echo "Waiting for DynamoDB table to be active..."
@@ -40,24 +50,29 @@ echo "Verifying DynamoDB table..."
 aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" dynamodb list-tables
 
 # Create IAM role for Lambda
-echo "Creating IAM role for Lambda..."
-aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" iam create-role \
-    --role-name lambda-execution-role \
-    --assume-role-policy-document '{
-        "Version": "2012-10-17",
-        "Statement": [
-            {
-                "Effect": "Allow",
-                "Principal": {
-                    "Service": "lambda.amazonaws.com"
-                },
-                "Action": "sts:AssumeRole"
-            }
-        ]
-    }'
+echo "Ensuring IAM role exists..."
+if aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" iam get-role \
+    --role-name lambda-execution-role >/dev/null 2>&1; then
+    echo "- IAM role already exists: lambda-execution-role"
+else
+    aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" iam create-role \
+        --role-name lambda-execution-role \
+        --assume-role-policy-document '{
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": "lambda.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                }
+            ]
+        }'
+fi
 
 # Attach policy to role
-echo "Attaching policies to Lambda role..."
+echo "Ensuring IAM policies are attached..."
 aws_localstack --endpoint-url="$LOCALSTACK_ENDPOINT" iam attach-role-policy \
     --role-name lambda-execution-role \
     --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole

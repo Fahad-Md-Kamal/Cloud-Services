@@ -1,134 +1,258 @@
-import json
-import boto3
 import csv
+import json
 import logging
+import struct
 from datetime import datetime
 from urllib.parse import unquote_plus
 
-# Configure logging
+import boto3
+
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Initialize AWS clients (will use LocalStack endpoints)
-s3_client = boto3.client('s3')
-dynamodb = boto3.resource('dynamodb')
+s3_client = boto3.client("s3")
+dynamodb = boto3.resource("dynamodb")
 
-# DynamoDB table name
-TABLE_NAME = 'file-processing-results'
+TABLE_NAME = "file-processing-results"
+CSV_EXTENSIONS = {".csv"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"}
+
 
 def lambda_handler(event, context):
     """
-    Lambda function to process CSV files uploaded to S3.
-    Extracts metadata and stores results in DynamoDB.
+    Process supported uploads from S3 and store extracted metadata in DynamoDB.
     """
-    
     try:
-        # Parse S3 event
-        for record in event['Records']:
-            # Extract bucket and object key from S3 event
-            bucket = record['s3']['bucket']['name']
-            key = unquote_plus(record['s3']['object']['key'])
-            
-            logger.info(f"Processing file: {key} from bucket: {bucket}")
-            
-            # Check if it's a CSV file
-            if not key.lower().endswith('.csv'):
-                logger.warning(f"Skipping non-CSV file: {key}")
+        for record in event["Records"]:
+            bucket = record["s3"]["bucket"]["name"]
+            key = unquote_plus(record["s3"]["object"]["key"])
+
+            logger.info("Processing file: %s from bucket: %s", key, bucket)
+
+            if has_extension(key, CSV_EXTENSIONS):
+                result = process_csv_file(bucket, key)
+            elif has_extension(key, IMAGE_EXTENSIONS):
+                result = process_image_file(bucket, key)
+            else:
+                logger.warning("Skipping unsupported file: %s", key)
                 continue
-                
-            # Process the CSV file
-            result = process_csv_file(bucket, key)
-            
-            # Store results in DynamoDB
+
             store_results(result)
-            
-            logger.info(f"Successfully processed file: {key}")
-            
+            logger.info("Successfully processed file: %s", key)
+
         return {
-            'statusCode': 200,
-            'body': json.dumps('Files processed successfully')
+            "statusCode": 200,
+            "body": json.dumps("Files processed successfully"),
         }
-        
-    except Exception as e:
-        logger.error(f"Error processing files: {str(e)}")
+    except Exception as exc:
+        logger.error("Error processing files: %s", exc)
         return {
-            'statusCode': 500,
-            'body': json.dumps(f'Error processing files: {str(e)}')
+            "statusCode": 500,
+            "body": json.dumps(f"Error processing files: {exc}"),
         }
+
+
+def has_extension(key, extensions):
+    lower_key = key.lower()
+    return any(lower_key.endswith(extension) for extension in extensions)
+
+
+def base_result(bucket, key, file_type, file_size, content_type):
+    timestamp = datetime.utcnow().isoformat()
+    return {
+        "file_id": key,
+        "bucket": bucket,
+        "object_key": key,
+        "file_type": file_type,
+        "content_type": content_type,
+        "uploaded_at": timestamp,
+        "processed_at": timestamp,
+        "file_size": file_size,
+        "status": "success",
+        "error_message": None,
+    }
+
+
+def get_s3_object(bucket, key):
+    response = s3_client.get_object(Bucket=bucket, Key=key)
+    body = response["Body"].read()
+    return body, response
+
 
 def process_csv_file(bucket, key):
     """
     Download and analyze CSV file from S3.
-    Returns metadata about the file.
     """
-    
     try:
-        # Download file from S3
-        response = s3_client.get_object(Bucket=bucket, Key=key)
-        file_content = response['Body'].read().decode('utf-8')
-        file_size = response['ContentLength']
-        
-        # Parse CSV content
+        file_bytes, response = get_s3_object(bucket, key)
+        file_content = file_bytes.decode("utf-8")
+        file_size = response["ContentLength"]
+        content_type = response.get("ContentType", "text/csv")
+
         csv_reader = csv.reader(file_content.splitlines())
-        
-        # Get headers (first row)
         headers = next(csv_reader, [])
-        
-        # Count rows (excluding header)
         rows = list(csv_reader)
+
         row_count = len(rows)
         column_count = len(headers)
-        
-        # Prepare result
-        result = {
-            'file_id': key,
-            'bucket': bucket,
-            'object_key': key,
-            'uploaded_at': datetime.utcnow().isoformat(),
-            'processed_at': datetime.utcnow().isoformat(),
-            'file_size': file_size,
-            'row_count': row_count,
-            'column_count': column_count,
-            'headers': headers,
-            'status': 'success',
-            'error_message': None
-        }
-        
-        logger.info(f"File analysis complete - Rows: {row_count}, Columns: {column_count}")
+
+        result = base_result(bucket, key, "csv", file_size, content_type)
+        result.update(
+            {
+                "row_count": row_count,
+                "column_count": column_count,
+                "headers": headers,
+            }
+        )
+
+        logger.info("CSV analysis complete - Rows: %s, Columns: %s", row_count, column_count)
         return result
-        
-    except Exception as e:
-        error_msg = f"Error processing CSV file: {str(e)}"
-        logger.error(error_msg)
-        
-        # Return error result
-        return {
-            'file_id': key,
-            'bucket': bucket,
-            'object_key': key,
-            'uploaded_at': datetime.utcnow().isoformat(),
-            'processed_at': datetime.utcnow().isoformat(),
-            'file_size': 0,
-            'row_count': 0,
-            'column_count': 0,
-            'headers': [],
-            'status': 'error',
-            'error_message': error_msg
-        }
+    except Exception as exc:
+        return build_error_result(bucket, key, "csv", f"Error processing CSV file: {exc}")
+
+
+def process_image_file(bucket, key):
+    """
+    Download and analyze image file from S3.
+    """
+    try:
+        file_bytes, response = get_s3_object(bucket, key)
+        file_size = response["ContentLength"]
+        content_type = response.get("ContentType", "application/octet-stream")
+        image_metadata = extract_image_metadata(file_bytes)
+
+        result = base_result(bucket, key, "image", file_size, content_type)
+        result.update(image_metadata)
+
+        logger.info(
+            "Image analysis complete - Format: %s, Width: %s, Height: %s",
+            image_metadata["image_format"],
+            image_metadata["width"],
+            image_metadata["height"],
+        )
+        return result
+    except Exception as exc:
+        return build_error_result(bucket, key, "image", f"Error processing image file: {exc}")
+
+
+def build_error_result(bucket, key, file_type, error_message):
+    logger.error(error_message)
+    result = base_result(bucket, key, file_type, 0, None)
+    result.update({"status": "error", "error_message": error_message})
+    return result
+
+
+def extract_image_metadata(file_bytes):
+    if file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        width, height = struct.unpack(">II", file_bytes[16:24])
+        return {"image_format": "PNG", "width": width, "height": height}
+
+    if file_bytes.startswith(b"\xff\xd8"):
+        return parse_jpeg_metadata(file_bytes)
+
+    if file_bytes.startswith((b"GIF87a", b"GIF89a")):
+        width, height = struct.unpack("<HH", file_bytes[6:10])
+        return {"image_format": "GIF", "width": width, "height": height}
+
+    if file_bytes.startswith(b"BM"):
+        width, height = struct.unpack("<II", file_bytes[18:26])
+        return {"image_format": "BMP", "width": width, "height": abs(height)}
+
+    if file_bytes.startswith(b"RIFF") and file_bytes[8:12] == b"WEBP":
+        return parse_webp_metadata(file_bytes)
+
+    raise ValueError("Unsupported image format")
+
+
+def parse_jpeg_metadata(file_bytes):
+    index = 2
+    while index < len(file_bytes):
+        if file_bytes[index] != 0xFF:
+            index += 1
+            continue
+
+        while index < len(file_bytes) and file_bytes[index] == 0xFF:
+            index += 1
+
+        if index >= len(file_bytes):
+            break
+
+        marker = file_bytes[index]
+        index += 1
+
+        if marker in {0xD8, 0xD9}:
+            continue
+
+        if index + 2 > len(file_bytes):
+            break
+
+        segment_length = struct.unpack(">H", file_bytes[index:index + 2])[0]
+        if segment_length < 2:
+            break
+
+        if marker in {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }:
+            if index + 7 > len(file_bytes):
+                break
+            height, width = struct.unpack(">HH", file_bytes[index + 3:index + 7])
+            return {"image_format": "JPEG", "width": width, "height": height}
+
+        index += segment_length
+
+    raise ValueError("Invalid JPEG metadata")
+
+
+def parse_webp_metadata(file_bytes):
+    chunk_header = file_bytes[12:16]
+
+    if chunk_header == b"VP8 ":
+        if len(file_bytes) < 30:
+            raise ValueError("Invalid WEBP metadata")
+        width, height = struct.unpack("<HH", file_bytes[26:30])
+        return {"image_format": "WEBP", "width": width & 0x3FFF, "height": height & 0x3FFF}
+
+    if chunk_header == b"VP8L":
+        if len(file_bytes) < 25:
+            raise ValueError("Invalid WEBP metadata")
+        b0, b1, b2, b3 = file_bytes[21:25]
+        width = 1 + (((b1 & 0x3F) << 8) | b0)
+        height = 1 + (((b3 & 0x0F) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+        return {"image_format": "WEBP", "width": width, "height": height}
+
+    if chunk_header == b"VP8X":
+        if len(file_bytes) < 30:
+            raise ValueError("Invalid WEBP metadata")
+        width_bytes = file_bytes[24:27]
+        height_bytes = file_bytes[27:30]
+        width = 1 + int.from_bytes(width_bytes, "little")
+        height = 1 + int.from_bytes(height_bytes, "little")
+        return {"image_format": "WEBP", "width": width, "height": height}
+
+    raise ValueError("Unsupported WEBP metadata")
+
 
 def store_results(result):
     """
     Store processing results in DynamoDB.
     """
-    
     try:
         table = dynamodb.Table(TABLE_NAME)
-        
-        # Put item in DynamoDB
         table.put_item(Item=result)
-        
-        logger.info(f"Results stored in DynamoDB for file: {result['file_id']}")
-        
-    except Exception as e:
-        logger.error(f"Error storing results in DynamoDB: {str(e)}")
-        raise e
+        logger.info("Results stored in DynamoDB for file: %s", result["file_id"])
+    except Exception as exc:
+        logger.error("Error storing results in DynamoDB: %s", exc)
+        raise
