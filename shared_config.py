@@ -1,40 +1,41 @@
-from dataclasses import asdict, dataclass
-import os
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-@dataclass(frozen=True)
-class AwsConnectionSettings:
-    endpoint_url: str
-    region_name: str
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    localstack_endpoint: str
+    aws_default_region: str
     aws_access_key_id: str
     aws_secret_access_key: str
+    upload_bucket: str
+    processed_bucket: str
+    table_name: str
+    transcription_queue_name: str
+    default_transcription_engine: str
+    whisper_tiny_model: str
+    whisper_large_v3_model: str
+    whisper_compute_type: str
+    whisper_download_root: str
+    openai_transcription_model: str
+    openai_api_key: str | None = None
+    lambda_function_name: str
+    lambda_role_name: str
+    localstack_container: str
+    localstack_docker_endpoint: str
+
+    @property
+    def boto3_kwargs(self) -> dict[str, str]:
+        return {
+            "endpoint_url": self.localstack_endpoint,
+            "region_name": self.aws_default_region,
+            "aws_access_key_id": self.aws_access_key_id,
+            "aws_secret_access_key": self.aws_secret_access_key,
+        }
 
 
-def require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Required environment variable '{name}' is not set.")
-    return value
-
-
-def require_envs(*names: str) -> dict[str, str]:
-    return {name: require_env(name) for name in names}
-
-
-def load_localstack_aws_settings() -> AwsConnectionSettings:
-    env = require_envs(
-        "LOCALSTACK_ENDPOINT",
-        "AWS_DEFAULT_REGION",
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-    )
-    return AwsConnectionSettings(
-        endpoint_url=env["LOCALSTACK_ENDPOINT"],
-        region_name=env["AWS_DEFAULT_REGION"],
-        aws_access_key_id=env["AWS_ACCESS_KEY_ID"],
-        aws_secret_access_key=env["AWS_SECRET_ACCESS_KEY"],
-    )
-
-
-def boto3_kwargs(settings: AwsConnectionSettings) -> dict[str, str]:
-    return asdict(settings)
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    return Settings()

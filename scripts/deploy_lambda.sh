@@ -21,11 +21,16 @@ require_env LAMBDA_ROLE_NAME
 # Create deployment package
 echo "Creating deployment package..."
 ZIP_PATH="$REPO_ROOT/function.zip"
-(cd "$REPO_ROOT/app" && zip -rq "$ZIP_PATH" .)
-(cd "$REPO_ROOT" && zip -q "$ZIP_PATH" shared_config.py)
+PACKAGE_DIR="$(mktemp -d)"
+trap 'aws_localstack_unstage_file "${STAGED_ZIP_PATH:-}"; rm -rf "$PACKAGE_DIR"; rm -f "$ZIP_PATH"' EXIT
+
+python3 -m pip install --quiet -r "$REPO_ROOT/requirements-lambda.txt" --target "$PACKAGE_DIR"
+cp "$REPO_ROOT"/shared_config.py "$PACKAGE_DIR"/
+cp "$REPO_ROOT"/app/*.py "$PACKAGE_DIR"/
+
+(cd "$PACKAGE_DIR" && zip -rq "$ZIP_PATH" .)
 
 STAGED_ZIP_PATH="$(aws_localstack_stage_file "$ZIP_PATH")"
-trap 'aws_localstack_unstage_file "$STAGED_ZIP_PATH"; rm -f "$ZIP_PATH"' EXIT
 
 LAMBDA_ROLE_ARN="arn:aws:iam::000000000000:role/$LAMBDA_ROLE_NAME"
 LAMBDA_FUNCTION_ARN="arn:aws:lambda:${AWS_DEFAULT_REGION}:000000000000:function:$LAMBDA_FUNCTION_NAME"
@@ -131,4 +136,4 @@ echo "- Runtime: python3.9"
 echo "- Trigger: S3 uploads to '$UPLOAD_BUCKET' bucket"
 echo "- Handler: handler.lambda_handler"
 echo ""
-echo "You can now upload CSV files to test the pipeline!"
+echo "You can now upload files to test the pipeline!"

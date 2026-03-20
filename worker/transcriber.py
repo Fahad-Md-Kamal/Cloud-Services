@@ -1,6 +1,5 @@
 import json
 import logging
-import os
 import subprocess
 import tempfile
 import time
@@ -10,38 +9,28 @@ from pathlib import Path
 import boto3
 from faster_whisper import WhisperModel
 from openai import OpenAI
-from shared_config import boto3_kwargs, load_localstack_aws_settings, require_envs
+from shared_config import get_settings
 
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("transcriber")
 
-AWS_SETTINGS = load_localstack_aws_settings()
-WORKER_ENV = require_envs(
-    "TRANSCRIPTION_QUEUE_NAME",
-    "TABLE_NAME",
-    "PROCESSED_BUCKET",
-    "WHISPER_TINY_MODEL",
-    "WHISPER_LARGE_V3_MODEL",
-    "WHISPER_COMPUTE_TYPE",
-    "WHISPER_DOWNLOAD_ROOT",
-    "OPENAI_TRANSCRIPTION_MODEL",
-)
-QUEUE_NAME = WORKER_ENV["TRANSCRIPTION_QUEUE_NAME"]
-TABLE_NAME = WORKER_ENV["TABLE_NAME"]
-PROCESSED_BUCKET = WORKER_ENV["PROCESSED_BUCKET"]
-WHISPER_TINY_MODEL = WORKER_ENV["WHISPER_TINY_MODEL"]
-WHISPER_LARGE_V3_MODEL = WORKER_ENV["WHISPER_LARGE_V3_MODEL"]
-WHISPER_COMPUTE_TYPE = WORKER_ENV["WHISPER_COMPUTE_TYPE"]
-WHISPER_DOWNLOAD_ROOT = WORKER_ENV["WHISPER_DOWNLOAD_ROOT"]
-OPENAI_TRANSCRIPTION_MODEL = WORKER_ENV["OPENAI_TRANSCRIPTION_MODEL"]
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+settings = get_settings()
+QUEUE_NAME = settings.transcription_queue_name
+TABLE_NAME = settings.table_name
+PROCESSED_BUCKET = settings.processed_bucket
+WHISPER_TINY_MODEL = settings.whisper_tiny_model
+WHISPER_LARGE_V3_MODEL = settings.whisper_large_v3_model
+WHISPER_COMPUTE_TYPE = settings.whisper_compute_type
+WHISPER_DOWNLOAD_ROOT = settings.whisper_download_root
+OPENAI_TRANSCRIPTION_MODEL = settings.openai_transcription_model
+OPENAI_API_KEY = settings.openai_api_key
 
-s3_client = boto3.client("s3", **boto3_kwargs(AWS_SETTINGS))
+s3_client = boto3.client("s3", **settings.boto3_kwargs)
 
-sqs_client = boto3.client("sqs", **boto3_kwargs(AWS_SETTINGS))
+sqs_client = boto3.client("sqs", **settings.boto3_kwargs)
 
-dynamodb = boto3.resource("dynamodb", **boto3_kwargs(AWS_SETTINGS))
+dynamodb = boto3.resource("dynamodb", **settings.boto3_kwargs)
 
 table = dynamodb.Table(TABLE_NAME)
 whisper_models = {}

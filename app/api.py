@@ -5,7 +5,7 @@ from decimal import Decimal
 import boto3
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 
-from shared_config import boto3_kwargs, load_localstack_aws_settings, require_envs
+from shared_config import get_settings
 
 
 TRANSCRIPTION_ENGINES = {"openai", "whisper-large-v3", "tiny"}
@@ -46,20 +46,19 @@ MEDIA_EXTENSIONS = {
 
 app = FastAPI(title="File Upload API")
 
-AWS_SETTINGS = load_localstack_aws_settings()
-SERVICE_ENV = require_envs("UPLOAD_BUCKET", "TABLE_NAME", "DEFAULT_TRANSCRIPTION_ENGINE")
-LOCALSTACK_ENDPOINT = AWS_SETTINGS.endpoint_url
-UPLOAD_BUCKET = SERVICE_ENV["UPLOAD_BUCKET"]
-TABLE_NAME = SERVICE_ENV["TABLE_NAME"]
-DEFAULT_TRANSCRIPTION_ENGINE = SERVICE_ENV["DEFAULT_TRANSCRIPTION_ENGINE"]
+settings = get_settings()
+LOCALSTACK_ENDPOINT = settings.localstack_endpoint
+UPLOAD_BUCKET = settings.upload_bucket
+TABLE_NAME = settings.table_name
+DEFAULT_TRANSCRIPTION_ENGINE = settings.default_transcription_engine
 
 
 def get_s3_client():
-    return boto3.client("s3", **boto3_kwargs(AWS_SETTINGS))
+    return boto3.client("s3", **settings.boto3_kwargs)
 
 
 def get_results_table():
-    dynamodb = boto3.resource("dynamodb", **boto3_kwargs(AWS_SETTINGS))
+    dynamodb = boto3.resource("dynamodb", **settings.boto3_kwargs)
     return dynamodb.Table(TABLE_NAME)
 
 
